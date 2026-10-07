@@ -10,12 +10,17 @@ from sklearn.ensemble import RandomForestClassifier
 # =========================================================
 # PAGE CONFIGURATION
 # =========================================================
+
 st.set_page_config(
     page_title="XAI Shield",
     page_icon="🛡️",
     layout="wide"
 )
 
+
+# =========================================================
+# FEATURES
+# =========================================================
 
 FEATURES = [
     "packet_count",
@@ -37,6 +42,7 @@ DISPLAY_NAMES = {
 # =========================================================
 # TRAIN DEMONSTRATION MODEL
 # =========================================================
+
 @st.cache_resource
 def train_demo_model():
 
@@ -51,13 +57,16 @@ def train_demo_model():
         "bytes_received": rng.integers(50, 80000, n),
     })
 
+    # Demonstration risk rules
     risk = (
-        X.failed_connections * 2.2
-        + (X.packet_count > 750) * 5
-        + (X.connection_duration < 3) * 3
-        + (X.bytes_sent > 40000) * 2
+        X["failed_connections"] * 2.2
+        + (X["packet_count"] > 750) * 5
+        + (X["connection_duration"] < 3) * 3
+        + (X["bytes_sent"] > 40000) * 2
     )
 
+    # 0 = NORMAL
+    # 1 = MALICIOUS
     y = (risk > 7).astype(int)
 
     model = RandomForestClassifier(
@@ -76,8 +85,10 @@ model, background = train_demo_model()
 # =========================================================
 # SHAP EXPLAINER
 # =========================================================
+
 @st.cache_resource
 def create_shap_explainer(_model):
+
     return shap.TreeExplainer(_model)
 
 
@@ -87,6 +98,7 @@ shap_explainer = create_shap_explainer(model)
 # =========================================================
 # LIME EXPLAINER
 # =========================================================
+
 @st.cache_resource
 def create_lime_explainer(_background):
 
@@ -105,6 +117,7 @@ lime_explainer = create_lime_explainer(background)
 # =========================================================
 # PAGE HEADER
 # =========================================================
+
 st.title("🛡️ XAI Shield")
 
 st.caption(
@@ -121,43 +134,44 @@ st.write(
 # =========================================================
 # SIDEBAR
 # =========================================================
+
 with st.sidebar:
 
     st.header("Network Activity")
 
     packet_count = st.number_input(
         "Packet count",
-        1,
-        10000,
-        400
+        min_value=1,
+        max_value=10000,
+        value=400
     )
 
     duration = st.number_input(
         "Connection duration (seconds)",
-        0.1,
-        3600.0,
-        30.0
+        min_value=0.1,
+        max_value=3600.0,
+        value=30.0
     )
 
     failed = st.number_input(
         "Failed connections",
-        0,
-        100,
-        2
+        min_value=0,
+        max_value=100,
+        value=2
     )
 
     sent = st.number_input(
         "Bytes sent",
-        0,
-        1000000,
-        12000
+        min_value=0,
+        max_value=1000000,
+        value=12000
     )
 
     received = st.number_input(
         "Bytes received",
-        0,
-        1000000,
-        18000
+        min_value=0,
+        max_value=1000000,
+        value=18000
     )
 
     analyze = st.button(
@@ -165,6 +179,10 @@ with st.sidebar:
         type="primary"
     )
 
+
+# =========================================================
+# CREATE SAMPLE
+# =========================================================
 
 sample = pd.DataFrame(
     [[
@@ -181,7 +199,12 @@ sample = pd.DataFrame(
 # =========================================================
 # ANALYSIS
 # =========================================================
+
 if analyze:
+
+    # =====================================================
+    # MODEL PREDICTION
+    # =====================================================
 
     prediction = int(
         model.predict(sample)[0]
@@ -195,6 +218,10 @@ if analyze:
         probabilities[prediction]
     )
 
+    malicious_probability = float(
+        probabilities[1]
+    )
+
     label = (
         "MALICIOUS"
         if prediction == 1
@@ -205,6 +232,7 @@ if analyze:
     # =====================================================
     # CLASSIFICATION RESULTS
     # =====================================================
+
     c1, c2, c3 = st.columns(3)
 
     c1.metric(
@@ -223,17 +251,36 @@ if analyze:
     )
 
 
+    if prediction == 1:
+
+        st.error(
+            "⚠️ Potential malicious network activity detected."
+        )
+
+    else:
+
+        st.success(
+            "✅ Network activity appears normal."
+        )
+
+
+    st.caption(
+        f"Estimated malicious probability: "
+        f"{malicious_probability:.1%}"
+    )
+
     st.divider()
 
 
-    # =====================================================
+    # =========================================================
     # SHAP EXPLANATION
-    # =====================================================
+    # =========================================================
+
     st.header("SHAP Explanation")
 
     st.write(
-        "SHAP explains how each network feature influenced this "
-        "specific prediction."
+        "SHAP shows how each network feature affected the model's "
+        "assessment of malicious activity."
     )
 
 
@@ -244,27 +291,30 @@ if analyze:
     values = shap_values.values
 
 
-    # Handle different SHAP output shapes
+    # =========================================================
+    # ALWAYS EXPLAIN CLASS 1 = MALICIOUS
+    # =========================================================
+
     if values.ndim == 3:
 
-        class_values = values[
+        malicious_shap_values = values[
             0,
             :,
-            prediction
+            1
         ]
 
     elif values.ndim == 2:
 
-        class_values = values[0]
+        malicious_shap_values = values[0]
 
     else:
 
-        class_values = values.flatten()
+        malicious_shap_values = values.flatten()
 
 
     shap_df = pd.DataFrame({
         "Feature": FEATURES,
-        "SHAP Value": class_values
+        "SHAP Value": malicious_shap_values
     })
 
 
@@ -279,33 +329,41 @@ if analyze:
     )
 
 
-    # =====================================================
-    # SHAP CLASSIFICATION MESSAGE
-    # =====================================================
+    # =========================================================
+    # SHAP EXPLANATION MESSAGE
+    # =========================================================
+
     if prediction == 1:
 
         st.error(
-            "⚠️ This network activity was classified as MALICIOUS."
+            "⚠️ SHAP is showing why the model found malicious "
+            "network characteristics."
         )
 
     else:
 
         st.success(
-            "✅ This network activity was classified as NORMAL."
+            "✅ SHAP is showing why the malicious risk remained low."
         )
 
 
     st.write(
-        "Positive SHAP values push the model toward **MALICIOUS**. "
-        "Negative SHAP values push the model toward **NORMAL**."
+        "🔴 Positive SHAP values increased the model's assessment "
+        "of **MALICIOUS** activity. "
+        "🟢 Negative SHAP values decreased malicious risk and "
+        "supported **NORMAL** activity."
     )
 
 
-    # =====================================================
+    # =========================================================
     # SHAP CHART
-    # =====================================================
+    # =========================================================
+
     shap_chart = shap_df[
-        ["Feature", "SHAP Value"]
+        [
+            "Feature",
+            "SHAP Value"
+        ]
     ].copy()
 
 
@@ -321,15 +379,16 @@ if analyze:
 
 
     st.bar_chart(
-    shap_chart.set_index("Feature"),
-    horizontal=True,
-    height=300
-)
+        shap_chart.set_index("Feature"),
+        horizontal=True,
+        height=300
+    )
 
 
-    # =====================================================
+    # =========================================================
     # SHAP ANALYST SUMMARY
-    # =====================================================
+    # =========================================================
+
     st.subheader(
         "SHAP Analyst Summary"
     )
@@ -344,24 +403,27 @@ if analyze:
             row["Feature"]
         ]
 
-        value = row["SHAP Value"]
+        value = float(
+            row["SHAP Value"]
+        )
 
 
         if value > 0:
 
             st.write(
-                f"🔴 **{feature}** — pushed the prediction "
-                f"toward **MALICIOUS** "
+                f"🔴 **{feature}** — increased malicious risk "
                 f"(SHAP: {value:.4f})"
             )
+
 
         elif value < 0:
 
             st.write(
-                f"🟢 **{feature}** — pushed the prediction "
-                f"toward **NORMAL** "
+                f"🟢 **{feature}** — decreased malicious risk "
+                f"and supported NORMAL activity "
                 f"(SHAP: {value:.4f})"
             )
+
 
         else:
 
@@ -370,18 +432,49 @@ if analyze:
             )
 
 
+    # =========================================================
+    # STRONGEST SHAP FEATURE
+    # =========================================================
+
     strongest_shap = shap_df.iloc[0]
 
     strongest_shap_name = DISPLAY_NAMES[
         strongest_shap["Feature"]
     ]
 
-
-    st.info(
-        f"According to SHAP, the most influential feature for this "
-        f"prediction was **{strongest_shap_name}**."
+    strongest_shap_value = float(
+        strongest_shap["SHAP Value"]
     )
 
+
+    if strongest_shap_value > 0:
+
+        shap_direction = (
+            "increased the model's assessment of malicious activity"
+        )
+
+    elif strongest_shap_value < 0:
+
+        shap_direction = (
+            "decreased malicious risk and supported normal activity"
+        )
+
+    else:
+
+        shap_direction = (
+            "had little or no influence on the prediction"
+        )
+
+
+    st.info(
+        f"According to SHAP, the most influential feature was "
+        f"**{strongest_shap_name}**, which {shap_direction}."
+    )
+
+
+    # =========================================================
+    # TECHNICAL SHAP DETAILS
+    # =========================================================
 
     with st.expander(
         "View technical SHAP details"
@@ -396,7 +489,7 @@ if analyze:
 
         st.dataframe(
             shap_details,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -404,28 +497,33 @@ if analyze:
     st.divider()
 
 
-    # =====================================================
+    # =========================================================
     # LIME EXPLANATION
-    # =====================================================
+    # =========================================================
+
     st.header("LIME Explanation")
 
     st.write(
-        "LIME creates a local approximation of the model around "
-        "this network event and identifies the conditions that "
-        "most influenced the prediction."
+        "LIME creates a simplified local explanation around this "
+        "network event and shows which conditions increased or "
+        "decreased the model's assessment of malicious activity."
     )
 
+
+    # =========================================================
+    # ALWAYS EXPLAIN CLASS 1 = MALICIOUS
+    # =========================================================
 
     lime_result = lime_explainer.explain_instance(
         sample.iloc[0].values,
         model.predict_proba,
         num_features=len(FEATURES),
-        labels=(prediction,)
+        labels=(1,)
     )
 
 
     lime_list = lime_result.as_list(
-        label=prediction
+        label=1
     )
 
 
@@ -449,9 +547,36 @@ if analyze:
     )
 
 
-    #    # =====================================================
+    # =========================================================
+    # LIME MESSAGE
+    # =========================================================
+
+    if prediction == 1:
+
+        st.error(
+            "⚠️ LIME is showing which local conditions contributed "
+            "to malicious risk."
+        )
+
+    else:
+
+        st.success(
+            "✅ LIME is showing which local conditions helped keep "
+            "the malicious risk low."
+        )
+
+
+    st.write(
+        "🔴 Positive LIME weights support **MALICIOUS** activity. "
+        "🟢 Negative LIME weights oppose malicious activity and "
+        "support **NORMAL** activity."
+    )
+
+
+    # =========================================================
     # LIME CHART
-    # =====================================================
+    # =========================================================
+
     lime_chart = lime_df[
         [
             "Condition",
@@ -459,9 +584,11 @@ if analyze:
         ]
     ].copy()
 
+
     lime_chart = lime_chart.sort_values(
         "LIME Weight"
     )
+
 
     st.bar_chart(
         lime_chart.set_index("Condition"),
@@ -469,9 +596,11 @@ if analyze:
         height=300
     )
 
-    # =====================================================
+
+    # =========================================================
     # LIME ANALYST SUMMARY
-    # =====================================================
+    # =========================================================
+
     st.subheader(
         "LIME Analyst Summary"
     )
@@ -486,26 +615,28 @@ if analyze:
             "Condition"
         ]
 
-        weight = row[
-            "LIME Weight"
-        ]
+        weight = float(
+            row["LIME Weight"]
+        )
 
 
         if weight > 0:
 
             st.write(
-                f"🔴 **{condition}** — supported the "
-                f"**{label}** prediction "
+                f"🔴 **{condition}** — increased support for "
+                f"the MALICIOUS class "
                 f"(LIME: {weight:.4f})"
             )
+
 
         elif weight < 0:
 
             st.write(
-                f"🟢 **{condition}** — opposed the "
-                f"**{label}** prediction "
+                f"🟢 **{condition}** — decreased support for "
+                f"the MALICIOUS class and supported NORMAL activity "
                 f"(LIME: {weight:.4f})"
             )
+
 
         else:
 
@@ -514,14 +645,50 @@ if analyze:
             )
 
 
+    # =========================================================
+    # STRONGEST LIME CONDITION
+    # =========================================================
+
     strongest_lime = lime_df.iloc[0]
+
+    strongest_lime_condition = (
+        strongest_lime["Condition"]
+    )
+
+    strongest_lime_weight = float(
+        strongest_lime["LIME Weight"]
+    )
+
+
+    if strongest_lime_weight > 0:
+
+        lime_direction = (
+            "increased support for malicious activity"
+        )
+
+    elif strongest_lime_weight < 0:
+
+        lime_direction = (
+            "decreased support for malicious activity "
+            "and supported normal activity"
+        )
+
+    else:
+
+        lime_direction = (
+            "had little or no influence"
+        )
 
 
     st.info(
-        "According to LIME, the strongest local condition was "
-        f"**{strongest_lime['Condition']}**."
+        f"According to LIME, the strongest local condition was "
+        f"**{strongest_lime_condition}**, which {lime_direction}."
     )
 
+
+    # =========================================================
+    # TECHNICAL LIME DETAILS
+    # =========================================================
 
     with st.expander(
         "View technical LIME details"
@@ -529,7 +696,7 @@ if analyze:
 
         st.dataframe(
             lime_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -537,17 +704,18 @@ if analyze:
     st.divider()
 
 
-    # =====================================================
-    # SHAP VS LIME COMPARISON
-    # =====================================================
+    # =========================================================
+    # SHAP VS. LIME
+    # =========================================================
+
     st.header(
         "SHAP vs. LIME"
     )
 
 
     st.write(
-        "Both techniques explain the same Random Forest prediction, "
-        "but they use different approaches."
+        "Both techniques explain the model's assessment of the "
+        "**MALICIOUS** class, but they use different approaches."
     )
 
 
@@ -561,8 +729,8 @@ if analyze:
         st.subheader("SHAP")
 
         st.write(
-            "**Approach:** Uses the trained model to estimate "
-            "how much each feature contributed to the prediction."
+            "**Approach:** Uses the trained Random Forest model "
+            "to estimate how each feature influenced malicious risk."
         )
 
         st.write(
@@ -570,8 +738,8 @@ if analyze:
         )
 
         st.write(
-            "**Interpretation:** Shows whether each feature pushed "
-            "the prediction toward malicious or normal."
+            "**Interpretation:** Positive values increase malicious "
+            "risk, while negative values decrease malicious risk."
         )
 
 
@@ -585,26 +753,27 @@ if analyze:
         )
 
         st.write(
-            "**Strongest condition:** "
-            f"{strongest_lime['Condition']}"
+            f"**Strongest condition:** "
+            f"{strongest_lime_condition}"
         )
 
         st.write(
-            "**Interpretation:** Shows which local feature conditions "
-            "supported or opposed the selected prediction."
+            "**Interpretation:** Positive weights support malicious "
+            "activity, while negative weights oppose malicious activity."
         )
 
 
     st.caption(
-        "SHAP and LIME values are calculated differently, so their "
+        "SHAP and LIME use different explanation methods, so their "
         "numeric values should not be directly compared as if they "
         "were on the same scale."
     )
 
 
-    # =====================================================
-    # ANALYZED VALUES
-    # =====================================================
+    # =========================================================
+    # ANALYZED NETWORK VALUES
+    # =========================================================
+
     st.divider()
 
     st.header(
@@ -619,10 +788,14 @@ if analyze:
 
     st.dataframe(
         display_sample,
-        use_container_width=True,
+        width="stretch",
         hide_index=True
     )
 
+
+# =========================================================
+# BEFORE ANALYSIS
+# =========================================================
 
 else:
 
@@ -635,6 +808,7 @@ else:
 # =========================================================
 # FOOTER
 # =========================================================
+
 st.divider()
 
 st.caption(
