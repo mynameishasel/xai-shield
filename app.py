@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import shap
+from datetime import datetime, timezone
 
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.ensemble import RandomForestClassifier
@@ -37,6 +38,81 @@ DISPLAY_NAMES = {
     "bytes_sent": "Bytes Sent",
     "bytes_received": "Bytes Received"
 }
+
+
+# =========================================================
+# ENHANCEMENT: SEVERITY, RECOMMENDATIONS, SESSION HISTORY
+# =========================================================
+
+def severity_from_probability(malicious_probability):
+    """Illustrative probability bands, NOT calibrated incident severity."""
+    if malicious_probability < 0.25:
+        return "LOW"
+    if malicious_probability < 0.50:
+        return "MEDIUM"
+    if malicious_probability < 0.75:
+        return "HIGH"
+    return "CRITICAL"
+
+
+def analyst_recommendations(sample_row, malicious_probability, shap_df):
+    """Severity-aware, rule-based guidance; not a confirmed attack diagnosis."""
+    severity = severity_from_probability(malicious_probability)
+
+    # Low-probability events should not be treated as incidents simply because
+    # a feature has a small positive local SHAP contribution.
+    if severity == "LOW":
+        return [
+            "Continue routine network monitoring; no immediate investigation is suggested by this demonstration model.",
+            "Retain the analysis for comparison with future activity if needed.",
+        ]
+
+    recommendations = []
+    if severity == "MEDIUM":
+        recommendations.append(
+            "Review this event alongside recent activity and verify whether its behavior is expected."
+        )
+    elif severity == "HIGH":
+        recommendations.append(
+            "Prioritize analyst investigation and compare this event with relevant network and authentication logs."
+        )
+    else:  # CRITICAL
+        recommendations.append(
+            "Escalate promptly for analyst review and corroborate the alert with independent security evidence."
+        )
+
+    if sample_row["failed_connections"] > 11:
+        recommendations.append("Review authentication logs for repeated failed connection attempts.")
+    if sample_row["packet_count"] > 750:
+        recommendations.append("Review packet-rate trends for unusually high traffic volume.")
+    if sample_row["bytes_sent"] > 40000:
+        recommendations.append("Check outbound traffic destinations and verify that the transfer was authorized.")
+    if sample_row["connection_duration"] < 3:
+        recommendations.append("Check whether short-lived connections form a pattern of automated activity.")
+
+    # SHAP always explains the MALICIOUS class. A positive value identifies
+    # local model support, not proof of an actual attack.
+    positive = shap_df.loc[shap_df["SHAP Value"] > 0]
+    if not positive.empty:
+        top = positive.sort_values("SHAP Value", ascending=False).iloc[0]["Feature"]
+        recommendations.append(
+            f"Review {DISPLAY_NAMES[top].lower()} as a model-identified contributor to malicious risk."
+        )
+
+    if severity == "MEDIUM":
+        recommendations.append("Continue monitoring; escalate only if other evidence supports concern.")
+    elif severity == "HIGH":
+        recommendations.append("Corroborate the model output before taking incident-response action.")
+    else:
+        recommendations.append("Follow your organization's incident triage process; do not rely on this demo score alone.")
+
+    return list(dict.fromkeys(recommendations))
+
+
+if "event_history" not in st.session_state:
+    st.session_state.event_history = []
+if "last_sample" not in st.session_state:
+    st.session_state.last_sample = None
 
 
 # =========================================================
@@ -197,10 +273,14 @@ sample = pd.DataFrame(
 
 
 # =========================================================
-# ANALYSIS
+# ANALYSIS (retain last result across Streamlit reruns)
 # =========================================================
 
 if analyze:
+    st.session_state.last_sample = sample.copy()
+
+if st.session_state.last_sample is not None:
+    sample = st.session_state.last_sample.copy()
 
     # =====================================================
     # MODEL PREDICTION
@@ -267,6 +347,15 @@ if analyze:
     st.caption(
         f"Estimated malicious probability: "
         f"{malicious_probability:.1%}"
+    )
+
+    severity = severity_from_probability(malicious_probability)
+    st.subheader("Threat Severity — New")
+    st.metric("Demonstration risk band", severity)
+    st.caption(
+        "LOW: below 25% · MEDIUM: 25–49.9% · HIGH: 50–74.9% · "
+        "CRITICAL: 75% and above. These are illustrative thresholds "
+        "on model output, not validated real-world incident severity."
     )
 
     st.divider()
@@ -771,6 +860,45 @@ if analyze:
 
 
     # =========================================================
+    # ENHANCEMENT: ANALYST ACTIONS AND CSV EXPORT
+    # =========================================================
+
+    st.divider()
+    st.header("Analyst Recommendations — New")
+    recommendations = analyst_recommendations(
+        sample.iloc[0], malicious_probability, shap_df
+    )
+    st.caption("Rule-based suggestions for investigation; not proof of an attack.")
+    for item in recommendations:
+        st.write(f"• {item}")
+
+    event = {
+        "Timestamp (UTC)": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "Classification": label,
+        "Confidence": round(probability, 4),
+        "Malicious Probability": round(malicious_probability, 4),
+        "Severity": severity,
+        **{feature: sample.iloc[0][feature] for feature in FEATURES},
+        "Top SHAP Feature": strongest_shap_name,
+        "Top SHAP Value": round(strongest_shap_value, 6),
+        "Top LIME Condition": strongest_lime_condition,
+        "Top LIME Weight": round(strongest_lime_weight, 6),
+        "Recommendations": " | ".join(recommendations),
+    }
+
+    # Only create a history event on a new Analyze click, not every rerun.
+    if analyze:
+        st.session_state.event_history.append(event)
+    report_df = pd.DataFrame([event])
+    st.download_button(
+        "Download this analysis (CSV)",
+        data=report_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="xai_shield_analysis.csv",
+        mime="text/csv",
+        key="download_analysis",
+    )
+
+    # =========================================================
     # ANALYZED NETWORK VALUES
     # =========================================================
 
@@ -803,6 +931,38 @@ else:
         "Enter network values in the sidebar and select "
         "**Analyze Activity**."
     )
+
+
+# =========================================================
+# ENHANCEMENT: SESSION-ONLY ACTIVITY HISTORY
+# =========================================================
+
+st.divider()
+st.header("Network Activity History — New")
+st.caption("Events are kept only in this browser session, not in a database.")
+if st.session_state.event_history:
+    history_df = pd.DataFrame(st.session_state.event_history)
+    visible_columns = [
+        "Timestamp (UTC)", "Classification", "Confidence",
+        "Malicious Probability", "Severity", "packet_count",
+        "failed_connections", "bytes_sent",
+    ]
+    st.dataframe(
+        history_df[visible_columns].iloc[::-1],
+        width="stretch", hide_index=True,
+    )
+    st.download_button(
+        "Download session history (CSV)",
+        data=history_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="xai_shield_history.csv",
+        mime="text/csv",
+        key="download_history",
+    )
+    if st.button("Clear session history"):
+        st.session_state.event_history = []
+        st.rerun()
+else:
+    st.info("No events recorded yet. Select Analyze Activity to add one.")
 
 
 # =========================================================
