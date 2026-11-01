@@ -157,6 +157,23 @@ def train_demo_model():
 
 model, background = train_demo_model()
 
+# =========================================================
+# CYBER ACADEMY: ELEMENTARY STUDENT / ADVANCED MODE SELECTOR
+# =========================================================
+from student_mode import render_student_mode
+
+with st.sidebar:
+    experience_mode = st.radio(
+        "Choose your experience",
+        ["Student Mode (Grades 3–5)", "Advanced / Teacher Mode"],
+        key="xai_experience_mode",
+    )
+
+if experience_mode == "Student Mode (Grades 3–5)":
+    render_student_mode(model)
+    st.stop()
+
+
 
 # =========================================================
 # SHAP EXPLAINER
