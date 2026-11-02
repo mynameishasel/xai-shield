@@ -234,14 +234,14 @@ with st.sidebar:
 
     packet_count = st.number_input(
         "Packet count",
-        min_value=1,
+        min_value=0,
         max_value=10000,
         value=400
     )
 
     duration = st.number_input(
         "Connection duration (seconds)",
-        min_value=0.1,
+        min_value=0.0,
         max_value=3600.0,
         value=30.0
     )
@@ -272,6 +272,8 @@ with st.sidebar:
         type="primary"
     )
 
+    if analyze:
+        st.toast("Analyzing network activity. Please wait...", icon="🔍")
 
 # =========================================================
 # CREATE SAMPLE
@@ -293,10 +295,35 @@ sample = pd.DataFrame(
 # ANALYSIS (retain last result across Streamlit reruns)
 # =========================================================
 
-if analyze:
-    st.session_state.last_sample = sample.copy()
+# Reject invalid network input before predicting or displaying a prior result.
+# Streamlit marks out-of-range number inputs in red, but a previously
+# analyzed sample can otherwise remain visible and look like a new result.
 
-if st.session_state.last_sample is not None:
+invalid_inputs = []
+if packet_count < 1 or packet_count > 10000:
+    invalid_inputs.append("Packet count must be between 1 and 10,000.")
+if not 0.1 <= duration <= 3600.0:
+    invalid_inputs.append("Connection duration must be between 0.1 and 3,600 seconds.")
+if not 0 <= failed <= 100:
+    invalid_inputs.append("Failed connections must be between 0 and 100.")
+if not 0 <= sent <= 1000000:
+    invalid_inputs.append("Bytes sent must be between 0 and 1,000,000.")
+if not 0 <= received <= 1000000:
+    invalid_inputs.append("Bytes received must be between 0 and 1,000,000.")
+
+if invalid_inputs:
+    st.error("Invalid network input. Correct the highlighted fields before analyzing activity.")
+    for message in invalid_inputs:
+        st.write(f"- {message}")
+    # Keep the earlier analysis in session memory, but do not display it
+    # while the current input is invalid.
+    show_analysis = False
+else:
+    show_analysis = st.session_state.last_sample is not None or analyze
+    if analyze:
+        st.session_state.last_sample = sample.copy()
+
+if show_analysis:
     sample = st.session_state.last_sample.copy()
 
     # =====================================================
